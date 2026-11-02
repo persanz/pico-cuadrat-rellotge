@@ -19,6 +19,18 @@ host  --"S|DT:YYYY-MM-DD:HH:MM:SS:WD|TS:HH:MM:SS"-->  Pico (USB CDC)
 Pico  <--"K" (acknowledgement)------------------------
 ```
 
+## Works without the host
+
+The app **persists the time to flash** (`clock.dat`), written on every sync *and once a minute*.
+At boot it restores the RTC from that file, so after a power cycle the clock resumes from the last
+known time instead of showing `syncing…` — no host required.
+
+> Limitation: the RP2350 has no battery-backed clock, so it can't know how long it was powered off,
+> and its RTC drifts a few seconds/day. For true standalone accuracy add an I²C RTC
+> (e.g. DS3231 + coin cell).
+
+A host is still useful: whenever one is connected it re-syncs the clock to the exact time.
+
 ## Files
 
 | File | Runs on | Purpose |
@@ -59,6 +71,7 @@ board is unplugged and plugged back in.
 - `framebuf` on this MicroPython build has `ellipse()` but **no `circle()`** — useful to know
   if you extend the drawing code.
 - The 240×240 framebuffer is ~115 KB, so keep the application lean (heap is ~138 KB free).
+- If you later re-flash MicroPython, delete `clock.dat` if you want a clean start.
 
 ## License
 

@@ -20,14 +20,38 @@ BLUE  = 0x249F          # bright blue for the weekday
 DOW = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MON = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
+TIME_FILE = "clock.dat"        # last known time, so the clock survives a power cycle
+
+
+def save_time():
+    t = time.localtime()
+    try:
+        with open(TIME_FILE, "w") as f:
+            f.write("%d,%d,%d,%d,%d,%d,%d" % (t[0], t[1], t[2], t[3], t[4], t[5], t[6]))
+    except Exception:
+        pass
+
+
+def load_time():
+    """Restore the RTC from flash at boot. Returns True if a saved time was found."""
+    try:
+        with open(TIME_FILE) as f:
+            p = f.read().strip().split(",")
+        rtc.datetime((int(p[0]), int(p[1]), int(p[2]), int(p[6]),
+                      int(p[3]), int(p[4]), int(p[5]), 0))
+        return True
+    except Exception:
+        return False
+
+
 gc.collect()
 lcd = LCD_1inch54()
 rtc = RTC()
+time_set = load_time()   # resume from the last saved time if we have one
 
 poll = select.poll()
 poll.register(sys.stdin, select.POLLIN)
 
-time_set = False
 _glyph = bytearray(8 * 8 * 2)
 _gfb = framebuf.FrameBuffer(_glyph, 8, 8, framebuf.RGB565)
 
@@ -73,6 +97,7 @@ def handle(line):
                 rtc.datetime((int(y), int(mo), int(d), int(f[5]),
                               int(f[2]), int(f[3]), int(f[4]), 0))
                 time_set = True
+                save_time()
             except Exception:
                 pass
     return True
@@ -81,6 +106,7 @@ def handle(line):
 gc.collect()
 draw_clock()
 _tick = time.time()
+_saved_min = time.localtime()[4]
 while True:
     if poll.poll(0):
         try:
@@ -94,4 +120,7 @@ while True:
     if now - _tick >= 1.0:
         _tick = now
         draw_clock()
+        if time_set and time.localtime()[4] != _saved_min:   # once a minute: persist the time
+            _saved_min = time.localtime()[4]
+            save_time()
     time.sleep_ms(50)
