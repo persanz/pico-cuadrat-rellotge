@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+clock.dat
+battery_usage.csv

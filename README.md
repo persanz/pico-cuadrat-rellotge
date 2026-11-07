@@ -6,7 +6,13 @@ A tiny **MicroPython clock** for the **Waveshare RP2350-Touch-LCD-1.54** (round 
      23:59:27        ← time      (white)
      02 Nov 2026     ← date      (cyan)
        Monday        ← weekday   (blue)
+     Battery 75% ⚡   ← estimated battery level and charging indicator
 ```
+
+The battery indicator reads GPIO 29 using the Waveshare demo’s voltage scaling. Its
+percentage is a rough voltage-based estimate for a single Li-ion cell, not a charge
+measurement. Readings below 3.0 V or above 4.3 V show `?` instead of a percentage.
+A bolt appears when the charger status indicates charging.
 
 ## Why a helper script is needed
 
@@ -36,16 +42,21 @@ A host is still useful: whenever one is connected it re-syncs the clock to the e
 | File | Runs on | Purpose |
 |------|---------|---------|
 | `main.py` | the Pico | the clock itself |
+| `charging.py` | the Pico | reads charger status and draws the bolt |
+| `battery_log.py` | the Pico | records battery observations |
 | `time_pusher.py` | your computer | sends the current time over USB serial |
 
 ## Install
 
 1. Flash **MicroPython** for the RP2350 board and copy the Waveshare `lcd.py` display
    driver next to these files (it provides `LCD_1inch54`).
-2. Copy `main.py` to the board as `main.py` (e.g. with
+2. Copy the clock and battery modules to the board (e.g. with
    [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html)):
    ```bash
+   mpremote connect /dev/ttyACM0 fs cp charging.py :charging.py
+   mpremote connect /dev/ttyACM0 fs cp battery_log.py :battery_log.py
    mpremote connect /dev/ttyACM0 fs cp main.py :main.py
+   mpremote connect /dev/ttyACM0 reset
    ```
 3. On the host, run the time pusher:
    ```bash
@@ -76,3 +87,12 @@ board is unplugged and plugged back in.
 ## License
 
 MIT
+
+## Battery usage log
+
+The clock records voltage, ADC values and charger status in `battery_usage.csv` every
+five minutes while running. The log stops growing at 256 KiB. Elapsed seconds reset
+at boot; local clock time may be adjusted by USB sync. Charger status is not proof
+that USB is disconnected. Copy the log from the board with `mpremote fs cp :battery_usage.csv battery_usage.csv`
+for analysis. Voltage-based runtime forecasts
+are approximate and require a substantial battery-only discharge record.

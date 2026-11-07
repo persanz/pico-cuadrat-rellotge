@@ -8,13 +8,18 @@ import sys
 import time
 
 import framebuf
-from machine import RTC
+from machine import RTC, ADC, Pin
+# Hold the battery power circuit on as soon as the app starts.
+battery_enable = Pin(28, Pin.OUT, value=1)
+power_button = Pin(24, Pin.IN, Pin.PULL_UP)
+
 from lcd import LCD_1inch54
 
 WHITE = 0xFFFF
 BG    = 0x0841
 DIM   = 0x4A69
 CYAN  = 0x07FF
+ORANGE = 0x20FD        # byte-swapped RGB565 orange for this LCD
 BLUE  = 0x249F          # bright blue for the weekday
 
 DOW = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -46,11 +51,15 @@ def load_time():
 
 gc.collect()
 lcd = LCD_1inch54()
+import charging
+import battery_log
 rtc = RTC()
+battery_adc = ADC(Pin(29))
 time_set = load_time()   # resume from the last saved time if we have one
 
 poll = select.poll()
-poll.register(sys.stdin, select.POLLIN)
+serial_input = sys.stdin.buffer
+poll.register(serial_input, select.POLLIN)
 
 _glyph = bytearray(8 * 8 * 2)
 _gfb = framebuf.FrameBuffer(_glyph, 8, 8, framebuf.RGB565)
@@ -71,6 +80,21 @@ def ctext(s, y, scale, color):
     text(s, max(0, (240 - len(s) * 8 * scale) // 2), y, scale, color)
 
 
+def draw_battery():
+    # Waveshare demo uses a 3:1 divider on GPIO 29. Percentage is only
+    # an approximate resting-voltage indication for a single Li-ion cell.
+    voltage = sum(battery_adc.read_u16() for _ in range(8)) * 3.3 * 3 / (8 * 65535)
+    if voltage < 3.0 or voltage > 4.3:
+        label = "%.1fV?" % voltage
+    else:
+        percent = max(0, min(100, int((voltage - 3.0) * 100 / 1.2)))
+        label = "%d%%" % percent
+    line = "Battery " + label
+    x = (240 - len(line) * 8 - 10) // 2
+    text(line, x, 211, 1, ORANGE)
+    charging.draw(lcd, ORANGE, x + len(line) * 8 + 2, 211)
+
+
 def draw_clock():
     lcd.fill(BG)
     if not time_set:
@@ -81,6 +105,7 @@ def draw_clock():
         ctext("%02d:%02d:%02d" % (t[3], t[4], t[5]), 62, 3, WHITE)
         ctext("%02d %s %d" % (t[2], MON[t[1] - 1], t[0]), 128, 2, CYAN)
         ctext(DOW[t[6]], 162, 2, BLUE)
+    draw_battery()
     lcd.show()
 
 
@@ -105,21 +130,57 @@ def handle(line):
 
 gc.collect()
 draw_clock()
-_tick = time.time()
+_tick = time.ticks_ms()
 _saved_min = time.localtime()[4]
+# Ignore the button used to start the board until it has been released.
+_power_armed = False
+_power_pressed_at = None
+_power_shutdown = False
+_serial_buffer = ""
 while True:
+    pressed = power_button.value() == 0
+    if not _power_armed:
+        if not pressed:
+            _power_armed = True
+    elif pressed:
+        if _power_pressed_at is None:
+            _power_pressed_at = time.ticks_ms()
+        elif not _power_shutdown and time.ticks_diff(time.ticks_ms(), _power_pressed_at) >= 2000:
+            _power_shutdown = True
+            if time_set:
+                save_time()
+            lcd.fill(BG)
+            ctext("Release", 90, 2, CYAN)
+            ctext("to power off", 125, 2, CYAN)
+            lcd.show()
+    else:
+        if _power_shutdown:
+            lcd.fill(0)
+            lcd.show()
+            battery_enable.value(0)
+            while True:
+                time.sleep_ms(100)
+        _power_pressed_at = None
+    if _power_shutdown:
+        time.sleep_ms(50)
+        continue
     if poll.poll(0):
         try:
-            line = sys.stdin.readline()
+            ch = serial_input.read(1)
         except Exception:
-            line = ""
-        if line and handle(line):
-            print("K")
-            draw_clock()
-    now = time.time()
-    if now - _tick >= 1.0:
+            ch = ""
+        if ch in (b"\n", b"\r"):
+            if _serial_buffer and handle(_serial_buffer):
+                print("K")
+                draw_clock()
+            _serial_buffer = ""
+        elif ch:
+            _serial_buffer = (_serial_buffer + chr(ch[0]))[-128:]
+    now = time.ticks_ms()
+    if time.ticks_diff(now, _tick) >= 1000:
         _tick = now
         draw_clock()
+        battery_log.update(battery_adc, charging.is_charging())
         if time_set and time.localtime()[4] != _saved_min:   # once a minute: persist the time
             _saved_min = time.localtime()[4]
             save_time()
